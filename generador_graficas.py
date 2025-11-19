@@ -9,6 +9,7 @@ import geopandas as gpd
 from io import BytesIO
 import json
 from datetime import datetime
+import numpy as np
 
 # Configuración de la página
 st.set_page_config(
@@ -34,6 +35,16 @@ def load_data(uploaded_file):
         # Convertir fecha a formato datetime de manera segura
         df['fecha_del_incidente'] = pd.to_datetime(df['fecha_del_incidente'], errors='coerce')
         
+        # Convertir latitud y longitud a numérico, manejando errores
+        df['latitud'] = pd.to_numeric(df['latitud'], errors='coerce')
+        df['longitud'] = pd.to_numeric(df['longitud'], errors='coerce')
+        
+        # Filtrar coordenadas inválidas o fuera de rango razonable para México
+        df = df[
+            (df['latitud'].between(19.0, 20.0)) & 
+            (df['longitud'].between(-99.3, -99.1))
+        ]
+        
         return df
     except Exception as e:
         st.error(f"Error al cargar el archivo: {str(e)}")
@@ -48,6 +59,63 @@ def load_geojson(uploaded_geojson):
     except Exception as e:
         st.error(f"Error al cargar el archivo GeoJSON: {str(e)}")
         return None
+
+# Función para crear mapa
+def create_heatmap(df_filtered, geojson_data=None):
+    """Crea un mapa de calor con los datos filtrados"""
+    # Filtrar coordenadas válidas
+    coordenadas_validas = df_filtered[['latitud', 'longitud']].dropna()
+    
+    if coordenadas_validas.empty:
+        return None
+    
+    # Calcular centro del mapa de manera segura
+    try:
+        avg_lat = coordenadas_validas['latitud'].mean()
+        avg_lon = coordenadas_validas['longitud'].mean()
+    except Exception as e:
+        st.error(f"Error calculando centro del mapa: {str(e)}")
+        # Usar coordenadas por defecto de Magdalena Contreras
+        avg_lat = 19.32
+        avg_lon = -99.24
+    
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12)
+    
+    # Preparar datos para heatmap
+    heat_data = []
+    for idx, row in df_filtered.dropna(subset=['latitud', 'longitud']).iterrows():
+        heat_data.append([row['latitud'], row['longitud'], 1])
+    
+    # Añadir heatmap
+    HeatMap(heat_data, radius=15, blur=10, gradient={
+        0.4: 'blue',
+        0.6: 'cyan',
+        0.7: 'lime',
+        0.8: 'yellow',
+        1.0: 'red'
+    }).add_to(m)
+    
+    # Añadir capa GeoJSON si está disponible
+    if geojson_data is not None:
+        try:
+            folium.GeoJson(
+                geojson_data,
+                name="Límites de Colonias",
+                style_function=lambda x: {
+                    'fillColor': 'transparent',
+                    'color': 'black',
+                    'weight': 1,
+                    'fillOpacity': 0.1
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=[col for col in geojson_data.columns if col != 'geometry'],
+                    aliases=[col for col in geojson_data.columns if col != 'geometry']
+                )
+            ).add_to(m)
+        except Exception as e:
+            st.warning(f"No se pudo cargar el GeoJSON: {str(e)}")
+    
+    return m
 
 # Sidebar para carga de archivos
 st.sidebar.header("📁 Cargar Archivos")
@@ -74,6 +142,7 @@ if uploaded_file is not None:
         st.sidebar.subheader("📈 Resumen de Datos")
         st.sidebar.write(f"Total de registros: {len(df):,}")
         st.sidebar.write(f"Total de colonias: {df['colonia'].nunique()}")
+        st.sidebar.write(f"Registros con coordenadas válidas: {df[['latitud', 'longitud']].notna().all(axis=1).sum()}")
         
         # Manejo seguro de las fechas
         fechas_validas = df['fecha_del_incidente'].dropna()
@@ -101,71 +170,43 @@ if uploaded_file is not None:
         else:
             df_filtered = df.copy()
         
+        # Cargar GeoJSON si está disponible
+        geojson_data = None
+        if uploaded_geojson is not None:
+            geojson_data = load_geojson(uploaded_geojson)
+        
         # Layout principal
         col1, col2 = st.columns([2, 1])
         
         with col1:
             st.subheader("🗺️ Mapa de Calor de Incidentes")
             
-            # Crear mapa base
-            coordenadas_validas = df_filtered[['latitud', 'longitud']].dropna()
-            if not coordenadas_validas.empty:
-                # Calcular centro del mapa
-                avg_lat = coordenadas_validas['latitud'].mean()
-                avg_lon = coordenadas_validas['longitud'].mean()
-                
-                m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12)
-                
-                # Preparar datos para heatmap
-                heat_data = []
-                for idx, row in df_filtered.dropna(subset=['latitud', 'longitud']).iterrows():
-                    heat_data.append([row['latitud'], row['longitud'], 1])
-                
-                # Añadir heatmap
-                HeatMap(heat_data, radius=15, blur=10, gradient={
-                    0.4: 'blue',
-                    0.6: 'cyan',
-                    0.7: 'lime',
-                    0.8: 'yellow',
-                    1.0: 'red'
-                }).add_to(m)
-                
-                # Añadir capa GeoJSON si está disponible
-                if uploaded_geojson is not None:
-                    gdf = load_geojson(uploaded_geojson)
-                    if gdf is not None:
-                        # Asegurarse de que el GeoJSON esté en WGS84
-                        if gdf.crs != 'EPSG:4326':
-                            gdf = gdf.to_crs('EPSG:4326')
-                        
-                        folium.GeoJson(
-                            gdf,
-                            name="Límites de Colonias",
-                            style_function=lambda x: {
-                                'fillColor': 'transparent',
-                                'color': 'black',
-                                'weight': 1,
-                                'fillOpacity': 0.1
-                            },
-                            tooltip=folium.GeoJsonTooltip(
-                                fields=[col for col in gdf.columns if col != 'geometry'],
-                                aliases=[col for col in gdf.columns if col != 'geometry']
-                            )
-                        ).add_to(m)
-                
+            # Crear mapa
+            m = create_heatmap(df_filtered, geojson_data)
+            
+            if m is not None:
                 # Mostrar mapa
                 folium_static(m, width=700, height=500)
                 
                 # Botón para descargar mapa
-                map_html = m._repr_html_()
-                st.download_button(
-                    label="📥 Descargar Mapa (HTML)",
-                    data=map_html,
-                    file_name="mapa_calor_incidentes.html",
-                    mime="text/html"
-                )
+                try:
+                    map_html = m._repr_html_()
+                    st.download_button(
+                        label="📥 Descargar Mapa (HTML)",
+                        data=map_html,
+                        file_name="mapa_calor_incidentes.html",
+                        mime="text/html"
+                    )
+                except Exception as e:
+                    st.warning("No se pudo generar el archivo HTML del mapa")
             else:
-                st.warning("No hay datos de coordenadas para generar el mapa de calor.")
+                st.warning("No hay datos de coordenadas válidas para generar el mapa de calor.")
+                st.info("""
+                **Solución:**
+                - Verifique que las columnas 'latitud' y 'longitud' contengan valores numéricos
+                - Asegúrese de que las coordenadas estén en el rango aproximado de la Ciudad de México
+                - Las coordenadas deben estar en formato decimal (ej: 19.4326, -99.1332)
+                """)
         
         with col2:
             st.subheader("🏆 Top 10 Colonias Más Afectadas")
@@ -197,14 +238,17 @@ if uploaded_file is not None:
                 col_download1, col_download2 = st.columns(2)
                 
                 with col_download1:
-                    # Descargar como PNG
-                    img_bytes = fig_bar.to_image(format="png")
-                    st.download_button(
-                        label="📥 Descargar Gráfico (PNG)",
-                        data=img_bytes,
-                        file_name="top10_colonias_incidentes.png",
-                        mime="image/png"
-                    )
+                    try:
+                        # Descargar como PNG
+                        img_bytes = fig_bar.to_image(format="png")
+                        st.download_button(
+                            label="📥 Descargar Gráfico (PNG)",
+                            data=img_bytes,
+                            file_name="top10_colonias_incidentes.png",
+                            mime="image/png"
+                        )
+                    except Exception as e:
+                        st.error("Error al generar PNG. Instale: pip install kaleido")
                 
                 with col_download2:
                     # Descargar como HTML
@@ -220,7 +264,7 @@ if uploaded_file is not None:
         
         # Sección adicional de análisis
         st.markdown("---")
-        st.subheader("📈 Análisis Detallado por Colonia")
+        st.subheader("📈 Análisis Detallado")
         
         col3, col4 = st.columns(2)
         
@@ -254,33 +298,36 @@ if uploaded_file is not None:
                     title="Incidentes por Día",
                     labels={'x': 'Fecha', 'y': 'Número de Incidentes'}
                 )
+                fig_line.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig_line, use_container_width=True)
             else:
                 st.warning("No hay datos de fechas válidas para el análisis temporal.")
         
         # Tabla de datos
         st.markdown("---")
-        st.subheader("📋 Datos Detallados")
+        st.subheader("📋 Vista Previa de Datos")
         
-        # Mostrar tabla con paginación
-        columnas_mostrar = ['colonia', 'tipo_de_reporte_(incidente)', 'descripcion_del_incidente']
-        # Añadir fecha si está disponible
-        if 'fecha_del_incidente' in df_filtered.columns:
-            columnas_mostrar.insert(0, 'fecha_del_incidente')
+        # Mostrar tabla con las columnas disponibles
+        columnas_disponibles = [col for col in ['fecha_del_incidente', 'colonia', 'tipo_de_reporte_(incidente)', 'descripcion_del_incidente'] 
+                               if col in df_filtered.columns]
         
         st.dataframe(
-            df_filtered[columnas_mostrar].head(100),
-            use_container_width=True
+            df_filtered[columnas_disponibles].head(50),
+            use_container_width=True,
+            height=300
         )
         
         # Descargar datos filtrados
-        csv = df_filtered.to_csv(index=False)
-        st.download_button(
-            label="📥 Descargar Datos Filtrados (CSV)",
-            data=csv,
-            file_name="datos_incidentes_filtrados.csv",
-            mime="text/csv"
-        )
+        try:
+            csv = df_filtered.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                label="📥 Descargar Datos Filtrados (CSV)",
+                data=csv,
+                file_name="datos_incidentes_filtrados.csv",
+                mime="text/csv"
+            )
+        except Exception as e:
+            st.error("Error al generar el archivo CSV")
     
     else:
         st.error("No se pudieron cargar los datos. Por favor, verifica el formato del archivo.")
@@ -310,8 +357,8 @@ else:
     - colonia
     - tipo_de_reporte_(incidente) 
     - descripcion_del_incidente
-    - latitud
-    - longitud
+    - latitud (valores numéricos, ej: 19.4326)
+    - longitud (valores numéricos, ej: -99.1332)
     """)
 
 # Footer

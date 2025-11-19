@@ -8,6 +8,7 @@ from streamlit_folium import folium_static
 import geopandas as gpd
 from io import BytesIO
 import json
+from datetime import datetime
 
 # Configuración de la página
 st.set_page_config(
@@ -29,6 +30,9 @@ def load_data(uploaded_file):
         # Limpieza básica de datos
         df['colonia'] = df['colonia'].str.strip().str.title()
         df = df.dropna(subset=['colonia'])
+        
+        # Convertir fecha a formato datetime de manera segura
+        df['fecha_del_incidente'] = pd.to_datetime(df['fecha_del_incidente'], errors='coerce')
         
         return df
     except Exception as e:
@@ -70,7 +74,15 @@ if uploaded_file is not None:
         st.sidebar.subheader("📈 Resumen de Datos")
         st.sidebar.write(f"Total de registros: {len(df):,}")
         st.sidebar.write(f"Total de colonias: {df['colonia'].nunique()}")
-        st.sidebar.write(f"Período: {df['fecha_del_incidente'].min().date()} - {df['fecha_del_incidente'].max().date()}")
+        
+        # Manejo seguro de las fechas
+        fechas_validas = df['fecha_del_incidente'].dropna()
+        if not fechas_validas.empty:
+            min_date = fechas_validas.min().date()
+            max_date = fechas_validas.max().date()
+            st.sidebar.write(f"Período: {min_date} - {max_date}")
+        else:
+            st.sidebar.write("Período: No disponible")
         
         # Filtros en sidebar
         st.sidebar.markdown("---")
@@ -96,10 +108,11 @@ if uploaded_file is not None:
             st.subheader("🗺️ Mapa de Calor de Incidentes")
             
             # Crear mapa base
-            if not df_filtered[['latitud', 'longitud']].dropna().empty:
+            coordenadas_validas = df_filtered[['latitud', 'longitud']].dropna()
+            if not coordenadas_validas.empty:
                 # Calcular centro del mapa
-                avg_lat = df_filtered['latitud'].mean()
-                avg_lon = df_filtered['longitud'].mean()
+                avg_lat = coordenadas_validas['latitud'].mean()
+                avg_lon = coordenadas_validas['longitud'].mean()
                 
                 m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12)
                 
@@ -160,47 +173,50 @@ if uploaded_file is not None:
             # Contar incidentes por colonia
             colonia_counts = df_filtered['colonia'].value_counts().head(10)
             
-            # Crear gráfico de barras
-            fig_bar = px.bar(
-                x=colonia_counts.values,
-                y=colonia_counts.index,
-                orientation='h',
-                title="Top 10 Colonias con Más Incidentes",
-                labels={'x': 'Número de Incidentes', 'y': 'Colonia'},
-                color=colonia_counts.values,
-                color_continuous_scale='reds'
-            )
-            
-            fig_bar.update_layout(
-                height=500,
-                showlegend=False,
-                yaxis={'categoryorder': 'total ascending'}
-            )
-            
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-            # Botones para descargar gráfico de barras
-            col_download1, col_download2 = st.columns(2)
-            
-            with col_download1:
-                # Descargar como PNG
-                img_bytes = fig_bar.to_image(format="png")
-                st.download_button(
-                    label="📥 Descargar Gráfico (PNG)",
-                    data=img_bytes,
-                    file_name="top10_colonias_incidentes.png",
-                    mime="image/png"
+            if not colonia_counts.empty:
+                # Crear gráfico de barras
+                fig_bar = px.bar(
+                    x=colonia_counts.values,
+                    y=colonia_counts.index,
+                    orientation='h',
+                    title="Top 10 Colonias con Más Incidentes",
+                    labels={'x': 'Número de Incidentes', 'y': 'Colonia'},
+                    color=colonia_counts.values,
+                    color_continuous_scale='reds'
                 )
-            
-            with col_download2:
-                # Descargar como HTML
-                html_bytes = fig_bar.to_html().encode()
-                st.download_button(
-                    label="📥 Descargar Gráfico (HTML)",
-                    data=html_bytes,
-                    file_name="top10_colonias_incidentes.html",
-                    mime="text/html"
+                
+                fig_bar.update_layout(
+                    height=500,
+                    showlegend=False,
+                    yaxis={'categoryorder': 'total ascending'}
                 )
+                
+                st.plotly_chart(fig_bar, use_container_width=True)
+                
+                # Botones para descargar gráfico de barras
+                col_download1, col_download2 = st.columns(2)
+                
+                with col_download1:
+                    # Descargar como PNG
+                    img_bytes = fig_bar.to_image(format="png")
+                    st.download_button(
+                        label="📥 Descargar Gráfico (PNG)",
+                        data=img_bytes,
+                        file_name="top10_colonias_incidentes.png",
+                        mime="image/png"
+                    )
+                
+                with col_download2:
+                    # Descargar como HTML
+                    html_bytes = fig_bar.to_html().encode()
+                    st.download_button(
+                        label="📥 Descargar Gráfico (HTML)",
+                        data=html_bytes,
+                        file_name="top10_colonias_incidentes.html",
+                        mime="text/html"
+                    )
+            else:
+                st.warning("No hay datos suficientes para generar el gráfico de colonias.")
         
         # Sección adicional de análisis
         st.markdown("---")
@@ -212,40 +228,48 @@ if uploaded_file is not None:
             # Distribución por tipo de incidente
             st.write("**Distribución de Tipos de Incidente**")
             tipo_counts = df_filtered['tipo_de_reporte_(incidente)'].value_counts().head(10)
-            fig_pie = px.pie(
-                values=tipo_counts.values,
-                names=tipo_counts.index,
-                title="Top 10 Tipos de Incidente Más Comunes"
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            if not tipo_counts.empty:
+                fig_pie = px.pie(
+                    values=tipo_counts.values,
+                    names=tipo_counts.index,
+                    title="Top 10 Tipos de Incidente Más Comunes"
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.warning("No hay datos de tipos de incidente.")
         
         with col4:
             # Evolución temporal
             st.write("**Evolución Temporal de Incidentes**")
             df_temp = df_filtered.copy()
-            df_temp['fecha'] = pd.to_datetime(df_temp['fecha_del_incidente']).dt.date
-            daily_counts = df_temp['fecha'].value_counts().sort_index()
-            
-            fig_line = px.line(
-                x=daily_counts.index,
-                y=daily_counts.values,
-                title="Incidentes por Día",
-                labels={'x': 'Fecha', 'y': 'Número de Incidentes'}
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
+            # Usar solo fechas válidas
+            df_temp = df_temp.dropna(subset=['fecha_del_incidente'])
+            if not df_temp.empty:
+                df_temp['fecha'] = df_temp['fecha_del_incidente'].dt.date
+                daily_counts = df_temp['fecha'].value_counts().sort_index()
+                
+                fig_line = px.line(
+                    x=daily_counts.index,
+                    y=daily_counts.values,
+                    title="Incidentes por Día",
+                    labels={'x': 'Fecha', 'y': 'Número de Incidentes'}
+                )
+                st.plotly_chart(fig_line, use_container_width=True)
+            else:
+                st.warning("No hay datos de fechas válidas para el análisis temporal.")
         
         # Tabla de datos
         st.markdown("---")
         st.subheader("📋 Datos Detallados")
         
         # Mostrar tabla con paginación
+        columnas_mostrar = ['colonia', 'tipo_de_reporte_(incidente)', 'descripcion_del_incidente']
+        # Añadir fecha si está disponible
+        if 'fecha_del_incidente' in df_filtered.columns:
+            columnas_mostrar.insert(0, 'fecha_del_incidente')
+        
         st.dataframe(
-            df_filtered[[
-                'fecha_del_incidente', 
-                'colonia', 
-                'tipo_de_reporte_(incidente)',
-                'descripcion_del_incidente'
-            ]].head(100),
+            df_filtered[columnas_mostrar].head(100),
             use_container_width=True
         )
         

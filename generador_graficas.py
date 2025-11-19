@@ -38,7 +38,11 @@ def get_image_download_link(fig, filename="grafico.png"):
 # Función para limpiar y convertir columnas numéricas
 def clean_numeric_column(series):
     """Limpia y convierte una columna a numérica"""
-    # Reemplazar comas por puntos para decimales
+    # Si ya es numérico, devolver tal cual
+    if pd.api.types.is_numeric_dtype(series):
+        return series
+    
+    # Reemplazar comas por puntos para decimales y convertir a minúsculas
     series = series.astype(str).str.replace(',', '.')
     # Convertir a numérico, los errores se convierten en NaN
     return pd.to_numeric(series, errors='coerce')
@@ -78,8 +82,8 @@ if uploaded_file is not None:
         with st.sidebar.expander("📊 Info del Dataset"):
             st.write(f"**Filas:** {df.shape[0]}")
             st.write(f"**Columnas:** {df.shape[1]}")
-            st.write("**Tipos de datos:**")
-            st.write(df.dtypes)
+            st.write("**Primeras filas:**")
+            st.dataframe(df.head(3))
                 
     except Exception as e:
         st.sidebar.error(f"Error al cargar archivo: {e}")
@@ -138,7 +142,7 @@ if df is not None:
     auto_update = st.checkbox("Actualización automática", value=True, 
                              help="Activar para ver cambios en tiempo real")
 
-    # MAPA DE CALOR GEOGRÁFICO - VERSIÓN CORREGIDA
+    # MAPA DE CALOR GEOGRÁFICO - VERSIÓN MEJORADA
     if chart_type == "Mapa de Calor Geográfico":
         st.subheader("🌍 Configuración del Mapa de Calor")
         
@@ -164,20 +168,12 @@ if df is not None:
                 help='Columna con valores "si" para lluvias, "no" o "nan" para no lluvias'
             )
             
-            # Valor para el mapa de calor - incluir todas las columnas numéricas
-            numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-            # Si no hay columnas numéricas, mostrar todas las columnas
-            if not numeric_columns:
-                value_col = st.selectbox(
-                    "Columna para valores del mapa de calor",
-                    df.columns.tolist()
-                )
-                st.warning("⚠️ La columna seleccionada no es numérica. Se intentará convertir.")
-            else:
-                value_col = st.selectbox(
-                    "Columna para valores del mapa de calor",
-                    numeric_columns
-                )
+            # Valor para el mapa de calor - incluir todas las columnas
+            all_columns = df.columns.tolist()
+            value_col = st.selectbox(
+                "Columna para valores del mapa de calor",
+                all_columns
+            )
             
             # Opciones de filtro MANUAL
             if lluvia_col != "Ninguna" and lluvia_col in df.columns:
@@ -226,198 +222,256 @@ if df is not None:
             heat_color = st.color_picker("Color de los puntos", "#FF0000")
             map_height = st.slider("Altura del mapa (pixels)", 400, 1000, 600)
         
-        # PREPARACIÓN DE DATOS - CORRECCIÓN APPLICADA
+        # DIAGNÓSTICO DE DATOS - VER QUÉ ESTÁ PASANDO
+        st.subheader("🔍 Diagnóstico de Datos")
+        
+        # Crear una copia para trabajar
         map_df = df.copy()
         
-        # 1. Limpiar y convertir columnas de coordenadas a numéricas
-        st.info("🔧 Convirtiendo coordenadas a formato numérico...")
-        map_df[lat_col] = clean_numeric_column(map_df[lat_col])
-        map_df[lon_col] = clean_numeric_column(map_df[lon_col])
+        # Mostrar información inicial
+        st.write(f"**Datos iniciales:** {len(map_df)} registros")
         
-        # 2. Limpiar y convertir columna de valores a numérica si es necesario
-        if value_col not in numeric_columns:
-            map_df[value_col] = clean_numeric_column(map_df[value_col])
-            st.info(f"🔧 Convirtiendo columna '{value_col}' a formato numérico...")
+        # 1. VERIFICAR Y CONVERTIR COORDENADAS
+        st.write("### 📍 Verificación de Coordenadas")
         
-        # 3. Aplicar filtro MANUAL de lluvias según selección
+        # Mostrar ejemplos de las coordenadas seleccionadas
+        col_coord1, col_coord2 = st.columns(2)
+        with col_coord1:
+            st.write(f"**Columna Latitud:** {lat_col}")
+            st.write(f"Tipo de datos: {map_df[lat_col].dtype}")
+            st.write("Primeros valores:")
+            st.write(map_df[lat_col].head(5).tolist())
+            
+        with col_coord2:
+            st.write(f"**Columna Longitud:** {lon_col}")
+            st.write(f"Tipo de datos: {map_df[lon_col].dtype}")
+            st.write("Primeros valores:")
+            st.write(map_df[lon_col].head(5).tolist())
+        
+        # Convertir coordenadas a numérico de forma segura
+        original_count = len(map_df)
+        
+        # Función mejorada de conversión
+        def safe_convert_to_numeric(series):
+            # Si ya es numérico, mantener igual
+            if pd.api.types.is_numeric_dtype(series):
+                return series
+            # Intentar conversión directa
+            converted = pd.to_numeric(series, errors='coerce')
+            # Si hay muchos NaN, intentar limpiar strings
+            if converted.isna().sum() > len(converted) * 0.5:  # Si más del 50% son NaN
+                # Limpiar strings: quitar espacios, convertir comas a puntos
+                cleaned = series.astype(str).str.strip().str.replace(',', '.')
+                converted = pd.to_numeric(cleaned, errors='coerce')
+            return converted
+        
+        # Aplicar conversión segura
+        map_df[lat_col] = safe_convert_to_numeric(map_df[lat_col])
+        map_df[lon_col] = safe_convert_to_numeric(map_df[lon_col])
+        
+        # 2. VERIFICAR Y CONVERTIR COLUMNA DE VALOR
+        st.write("### 📊 Verificación de Valores")
+        st.write(f"**Columna de Valor:** {value_col}")
+        st.write(f"Tipo de datos: {map_df[value_col].dtype}")
+        st.write("Primeros valores:")
+        st.write(map_df[value_col].head(5).tolist())
+        
+        # Convertir columna de valor a numérico
+        map_df[value_col] = safe_convert_to_numeric(map_df[value_col])
+        
+        # 3. MANEJO DE LLUVIAS - VERSIÓN MEJORADA
         if lluvia_col != "Ninguna" and lluvia_col in map_df.columns:
+            st.write("### 🌧️ Verificación de Reportes de Lluvia")
+            st.write(f"**Columna de Lluvia:** {lluvia_col}")
+            st.write(f"Tipo de datos: {map_df[lluvia_col].dtype}")
+            st.write("Valores únicos encontrados:")
+            st.write(map_df[lluvia_col].value_counts(dropna=False))
+            
             # Limpiar y estandarizar la columna de lluvias
             map_df[lluvia_col] = map_df[lluvia_col].astype(str).str.lower().str.strip()
             
-            # Reemplazar 'nan' y valores vacíos por 'no'
-            map_df[lluvia_col] = map_df[lluvia_col].replace(['nan', 'null', 'none', ''], 'no')
+            # Reemplazar valores equivalentes a "no"
+            valores_no = ['nan', 'null', 'none', '', 'na', 'no', 'false', '0', 'n']
+            map_df[lluvia_col] = map_df[lluvia_col].replace(valores_no, 'no')
             
+            # Aplicar filtro
             if filtro_lluvia == "Solo reportes por lluvia":
-                original_count = len(map_df)
+                before_filter = len(map_df)
                 map_df = map_df[map_df[lluvia_col] == "si"]
-                st.success(f"✅ Filtrado: {len(map_df)} de {original_count} registros (solo lluvias)")
+                st.success(f"✅ Filtrado: {len(map_df)} de {before_filter} registros (solo lluvias)")
             elif filtro_lluvia == "Excluir reportes por lluvia":
-                original_count = len(map_df)
+                before_filter = len(map_df)
                 map_df = map_df[map_df[lluvia_col] != "si"]
-                st.success(f"✅ Filtrado: {len(map_df)} de {original_count} registros (excluyendo lluvias)")
+                st.success(f"✅ Filtrado: {len(map_df)} de {before_filter} registros (excluyendo lluvias)")
             else:
                 st.info("📊 Mostrando todos los registros (sin filtrar por lluvias)")
         
-        # 4. Eliminar filas con valores NaN en coordenadas o valores
-        original_count = len(map_df)
-        map_df = map_df.dropna(subset=[lat_col, lon_col, value_col])
-        cleaned_count = len(map_df)
+        # 4. ELIMINAR SOLO REGISTROS CON COORDENADAS FALTANTES
+        before_clean = len(map_df)
         
-        if original_count != cleaned_count:
-            st.warning(f"⚠️ Se eliminaron {original_count - cleaned_count} registros con valores faltantes en coordenadas o valores")
+        # Solo eliminar registros donde AMBAS coordenadas son NaN
+        coord_mask = map_df[lat_col].notna() & map_df[lon_col].isna()
+        map_df = map_df[map_df[lat_col].notna() & map_df[lon_col].notna()]
         
-        # VERIFICACIÓN FINAL DE DATOS
-        if not map_df.empty:
-            # Verificar que tenemos datos válidos
-            valid_coords = (~map_df[lat_col].isna()) & (~map_df[lon_col].isna()) & (~map_df[value_col].isna())
-            valid_data_count = valid_coords.sum()
+        after_clean = len(map_df)
+        removed_coord = before_clean - after_clean
+        
+        if removed_coord > 0:
+            st.warning(f"⚠️ Se eliminaron {removed_coord} registros con coordenadas faltantes")
+        
+        # 5. MANEJO DE VALORES FALTANTES EN LA COLUMNA DE VALOR
+        before_value_clean = len(map_df)
+        
+        # Para la columna de valor, podemos mantener los registros y usar un valor por defecto
+        value_nan_count = map_df[value_col].isna().sum()
+        if value_nan_count > 0:
+            st.warning(f"⚠️ {value_nan_count} registros tienen valores NaN en la columna '{value_col}'")
             
-            if valid_data_count > 0:
-                st.success(f"✅ Datos listos: {valid_data_count} registros válidos para el mapa")
-                
-                # Mostrar estadísticas de las coordenadas
-                with st.expander("📐 Estadísticas de Coordenadas"):
-                    col_stat1, col_stat2, col_stat3 = st.columns(3)
-                    with col_stat1:
-                        st.metric("Latitud Mínima", f"{map_df[lat_col].min():.6f}")
-                        st.metric("Latitud Máxima", f"{map_df[lat_col].max():.6f}")
-                    with col_stat2:
-                        st.metric("Longitud Mínima", f"{map_df[lon_col].min():.6f}")
-                        st.metric("Longitud Máxima", f"{map_df[lon_col].max():.6f}")
-                    with col_stat3:
-                        st.metric("Valor Mínimo", f"{map_df[value_col].min():.2f}")
-                        st.metric("Valor Máximo", f"{map_df[value_col].max():.2f}")
-                
-                # CREAR MAPA DE CALOR
-                if st.button("🔄 Generar Mapa de Calor") or (auto_update and st.session_state.get('last_chart_type') == "Mapa de Calor Geográfico"):
-                    try:
-                        # Crear mapa base
-                        center_lat = map_df[lat_col].mean()
-                        center_lon = map_df[lon_col].mean()
-                        
-                        m = folium.Map(
-                            location=[center_lat, center_lon],
-                            zoom_start=map_zoom,
-                            tiles='OpenStreetMap'
-                        )
-                        
-                        # Añadir capa GeoJSON si está disponible
-                        if uploaded_geojson is not None and gdf is not None and show_geojson:
-                            # Función de estilo para los polígonos
-                            def style_function(feature):
-                                return {
-                                    'fillColor': '#3388ff',
-                                    'color': '#3388ff',
-                                    'weight': 2,
-                                    'fillOpacity': 0.1,
-                                }
-                            
-                            # Añadir GeoJSON al mapa
-                            folium.GeoJson(
-                                gdf,
-                                style_function=style_function,
-                                tooltip=folium.GeoJsonTooltip(
-                                    fields=[geojson_colonia_col] + ([geojson_alcaldia_col] if geojson_alcaldia_col != "Ninguna" else []),
-                                    aliases=["Colonia"] + (["Alcaldía"] if geojson_alcaldia_col != "Ninguna" else []),
-                                    localize=True
-                                )
-                            ).add_to(m)
-                        
-                        # Añadir puntos de calor
-                        for idx, row in map_df.iterrows():
-                            # Calcular tamaño basado en el valor (si es numérico)
-                            try:
-                                valor = float(row[value_col])
-                                # Normalizar el tamaño entre 5 y el radio máximo
-                                if map_df[value_col].max() > map_df[value_col].min():
-                                    normalized_val = (valor - map_df[value_col].min()) / (map_df[value_col].max() - map_df[value_col].min())
-                                    radius = 5 + (heat_radius - 5) * normalized_val
-                                else:
-                                    radius = heat_radius
-                            except:
-                                radius = heat_radius
-                            
-                            popup_text = f"""
-                            <b>Valor:</b> {row[value_col]}<br>
-                            <b>Lat:</b> {row[lat_col]:.6f}<br>
-                            <b>Lon:</b> {row[lon_col]:.6f}<br>
-                            """
-                            if colonia_col != "Ninguna" and colonia_col in row and pd.notna(row[colonia_col]):
-                                popup_text += f"<b>Colonia:</b> {row[colonia_col]}<br>"
-                            if lluvia_col != "Ninguna" and lluvia_col in row and pd.notna(row[lluvia_col]):
-                                popup_text += f"<b>Lluvia:</b> {row[lluvia_col]}<br>"
-                            
-                            folium.CircleMarker(
-                                location=[row[lat_col], row[lon_col]],
-                                radius=radius,
-                                popup=folium.Popup(popup_text, max_width=300),
-                                color=heat_color,
-                                fill=True,
-                                fillColor=heat_color,
-                                fillOpacity=heat_opacity,
-                                opacity=0.8,
-                                tooltip=f"Valor: {row[value_col]:.2f}"
-                            ).add_to(m)
-                        
-                        # Añadir título al mapa
-                        title_html = f'''
-                        <h3 align="center" style="font-size:20px"><b>{chart_title}</b></h3>
-                        '''
-                        m.get_root().html.add_child(folium.Element(title_html))
-                        
-                        # Mostrar mapa
-                        folium_static(m, width=800, height=map_height)
-                        
-                        # Mostrar estadísticas del mapa
-                        with st.expander("📈 Estadísticas del Mapa"):
-                            col_stat1, col_stat2, col_stat3 = st.columns(3)
-                            with col_stat1:
-                                st.metric("Total de puntos", len(map_df))
-                            with col_stat2:
-                                st.metric("Valor promedio", f"{map_df[value_col].mean():.2f}")
-                            with col_stat3:
-                                st.metric("Valor máximo", f"{map_df[value_col].max():.2f}")
-                        
-                        # Botones de descarga
-                        st.markdown("---")
-                        st.subheader("💾 Descargar Visualización")
-                        
-                        col_dl1, col_dl2 = st.columns(2)
-                        
-                        with col_dl1:
-                            # Exportar datos procesados
-                            csv = map_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Descargar datos procesados (CSV)",
-                                data=csv,
-                                file_name="datos_mapa_calor.csv",
-                                mime="text/csv"
-                            )
-                        
-                        with col_dl2:
-                            # Exportar mapa como HTML
-                            map_html = m._repr_html_()
-                            st.download_button(
-                                label="📥 Descargar Mapa (HTML)",
-                                data=map_html,
-                                file_name="mapa_calor.html",
-                                mime="text/html"
-                            )
-                        
-                        st.session_state.last_chart_type = "Mapa de Calor Geográfico"
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error al generar mapa: {str(e)}")
-                        st.info("💡 **Solución de problemas:** Verifica que las coordenadas estén en formato decimal (ej: 19.32059308, -99.22806048)")
+            # Opción para el usuario: eliminar o usar valor por defecto
+            value_handling = st.radio(
+                "¿Cómo manejar los valores faltantes?",
+                ["Eliminar registros", "Usar valor por defecto (0)"]
+            )
+            
+            if value_handling == "Eliminar registros":
+                map_df = map_df[map_df[value_col].notna()]
+                st.info(f"✅ Se eliminaron {value_nan_count} registros con valores faltantes")
             else:
-                st.error("❌ No hay registros válidos después de la limpieza de datos. Verifica tus columnas seleccionadas.")
+                map_df[value_col] = map_df[value_col].fillna(0)
+                st.info(f"✅ Se reemplazaron {value_nan_count} valores NaN por 0")
+        
+        # VERIFICACIÓN FINAL
+        st.write("### ✅ Estado Final de los Datos")
+        st.write(f"**Registros disponibles para el mapa:** {len(map_df)}")
+        
+        if len(map_df) > 0:
+            # Mostrar estadísticas finales
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            with col_stat1:
+                st.metric("Latitud Mínima", f"{map_df[lat_col].min():.6f}")
+                st.metric("Latitud Máxima", f"{map_df[lat_col].max():.6f}")
+            with col_stat2:
+                st.metric("Longitud Mínima", f"{map_df[lon_col].min():.6f}")
+                st.metric("Longitud Máxima", f"{map_df[lon_col].max():.6f}")
+            with col_stat3:
+                st.metric("Valor Mínimo", f"{map_df[value_col].min():.2f}")
+                st.metric("Valor Máximo", f"{map_df[value_col].max():.2f}")
+            
+            # CREAR MAPA DE CALOR
+            if st.button("🔄 Generar Mapa de Calor") or (auto_update and st.session_state.get('last_chart_type') == "Mapa de Calor Geográfico"):
+                try:
+                    # Crear mapa base
+                    center_lat = map_df[lat_col].mean()
+                    center_lon = map_df[lon_col].mean()
+                    
+                    m = folium.Map(
+                        location=[center_lat, center_lon],
+                        zoom_start=map_zoom,
+                        tiles='OpenStreetMap'
+                    )
+                    
+                    # Añadir capa GeoJSON si está disponible
+                    if uploaded_geojson is not None and gdf is not None and show_geojson:
+                        # Función de estilo para los polígonos
+                        def style_function(feature):
+                            return {
+                                'fillColor': '#3388ff',
+                                'color': '#3388ff',
+                                'weight': 2,
+                                'fillOpacity': 0.1,
+                            }
+                        
+                        # Añadir GeoJSON al mapa
+                        folium.GeoJson(
+                            gdf,
+                            style_function=style_function,
+                            tooltip=folium.GeoJsonTooltip(
+                                fields=[geojson_colonia_col] + ([geojson_alcaldia_col] if geojson_alcaldia_col != "Ninguna" else []),
+                                aliases=["Colonia"] + (["Alcaldía"] if geojson_alcaldia_col != "Ninguna" else []),
+                                localize=True
+                            )
+                        ).add_to(m)
+                    
+                    # Añadir puntos de calor
+                    for idx, row in map_df.iterrows():
+                        # Calcular tamaño basado en el valor
+                        try:
+                            valor = float(row[value_col])
+                            # Normalizar el tamaño
+                            if map_df[value_col].max() > map_df[value_col].min():
+                                normalized_val = (valor - map_df[value_col].min()) / (map_df[value_col].max() - map_df[value_col].min())
+                                radius = 5 + (heat_radius - 5) * normalized_val
+                            else:
+                                radius = heat_radius
+                        except:
+                            radius = heat_radius
+                        
+                        popup_text = f"""
+                        <b>Valor:</b> {row[value_col]}<br>
+                        <b>Lat:</b> {row[lat_col]:.6f}<br>
+                        <b>Lon:</b> {row[lon_col]:.6f}<br>
+                        """
+                        if colonia_col != "Ninguna" and colonia_col in row and pd.notna(row[colonia_col]):
+                            popup_text += f"<b>Colonia:</b> {row[colonia_col]}<br>"
+                        if lluvia_col != "Ninguna" and lluvia_col in row and pd.notna(row[lluvia_col]):
+                            popup_text += f"<b>Lluvia:</b> {row[lluvia_col]}<br>"
+                        
+                        folium.CircleMarker(
+                            location=[row[lat_col], row[lon_col]],
+                            radius=radius,
+                            popup=folium.Popup(popup_text, max_width=300),
+                            color=heat_color,
+                            fill=True,
+                            fillColor=heat_color,
+                            fillOpacity=heat_opacity,
+                            opacity=0.8,
+                            tooltip=f"Valor: {row[value_col]:.2f}"
+                        ).add_to(m)
+                    
+                    # Añadir título al mapa
+                    title_html = f'''
+                    <h3 align="center" style="font-size:20px"><b>{chart_title}</b></h3>
+                    '''
+                    m.get_root().html.add_child(folium.Element(title_html))
+                    
+                    # Mostrar mapa
+                    folium_static(m, width=800, height=map_height)
+                    
+                    # Botones de descarga
+                    st.markdown("---")
+                    st.subheader("💾 Descargar Visualización")
+                    
+                    col_dl1, col_dl2 = st.columns(2)
+                    
+                    with col_dl1:
+                        # Exportar datos procesados
+                        csv = map_df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Descargar datos procesados (CSV)",
+                            data=csv,
+                            file_name="datos_mapa_calor.csv",
+                            mime="text/csv"
+                        )
+                    
+                    with col_dl2:
+                        # Exportar mapa como HTML
+                        map_html = m._repr_html_()
+                        st.download_button(
+                            label="📥 Descargar Mapa (HTML)",
+                            data=map_html,
+                            file_name="mapa_calor.html",
+                            mime="text/html"
+                        )
+                    
+                    st.session_state.last_chart_type = "Mapa de Calor Geográfico"
+                    
+                except Exception as e:
+                    st.error(f"❌ Error al generar mapa: {str(e)}")
         else:
-            st.error("❌ No hay datos válidos después de aplicar los filtros. Verifica:")
-            st.error("- Las columnas de latitud y longitud contienen números")
-            st.error("- La columna de valor contiene datos numéricos")
-            st.error("- Los filtros no han eliminado todos los registros")
-
-# ... (el resto del código para otros tipos de gráficos se mantiene igual)
+            st.error("❌ No hay datos válidos después del procesamiento. Revisa:")
+            st.error("1. Las columnas de coordenadas contienen números válidos")
+            st.error("2. Los filtros aplicados no han eliminado todos los registros")
+            st.error("3. Los formatos de coordenadas son correctos (ej: 19.32059308, -99.22806048)")
 
 else:
     st.info("👆 Por favor carga un archivo de datos en el sidebar para comenzar")
@@ -433,12 +487,12 @@ with st.sidebar.expander("ℹ️ Instrucciones de Uso"):
     
     **Formato de Lluvias:**
     - "si" = Reporte por lluvias
-    - "no" o "nan" = No es reporte por lluvias
+    - "no", "nan", vacío = No es reporte por lluvias
     
     **Solución de Problemas:**
-    - Si ves errores, verifica que las coordenadas sean números
-    - Los valores NaN en coordenadas se eliminan automáticamente
-    - Las columnas no numéricas se convierten automáticamente
+    - Revisa el diagnóstico de datos para ver qué está pasando
+    - Los valores NaN en la columna de valor pueden reemplazarse por 0
+    - Solo se eliminan registros con coordenadas completamente faltantes
     """)
 
 st.markdown("---")

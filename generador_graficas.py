@@ -61,7 +61,7 @@ def load_geojson(uploaded_geojson):
         return None
 
 # Función para crear mapa
-def create_heatmap(df_filtered, geojson_data=None):
+def create_heatmap(df_filtered, geojson_data=None, colonia_column=None, show_heatmap=True, show_boundaries=True):
     """Crea un mapa de calor con los datos filtrados"""
     # Filtrar coordenadas válidas
     coordenadas_validas = df_filtered[['latitud', 'longitud']].dropna()
@@ -86,34 +86,49 @@ def create_heatmap(df_filtered, geojson_data=None):
     for idx, row in df_filtered.dropna(subset=['latitud', 'longitud']).iterrows():
         heat_data.append([row['latitud'], row['longitud'], 1])
     
-    # Añadir heatmap
-    HeatMap(heat_data, radius=15, blur=10, gradient={
-        0.4: 'blue',
-        0.6: 'cyan',
-        0.7: 'lime',
-        0.8: 'yellow',
-        1.0: 'red'
-    }).add_to(m)
+    # Añadir heatmap si está activado
+    if show_heatmap and heat_data:
+        heatmap_layer = HeatMap(heat_data, radius=15, blur=10, gradient={
+            0.4: 'blue',
+            0.6: 'cyan',
+            0.7: 'lime',
+            0.8: 'yellow',
+            1.0: 'red'
+        }, name="Mapa de Calor")
+        heatmap_layer.add_to(m)
     
-    # Añadir capa GeoJSON si está disponible
-    if geojson_data is not None:
+    # Añadir capa GeoJSON si está disponible y activada
+    if show_boundaries and geojson_data is not None:
         try:
-            folium.GeoJson(
+            # Asegurarse de que el GeoJSON esté en WGS84
+            if geojson_data.crs != 'EPSG:4326':
+                geojson_data = geojson_data.to_crs('EPSG:4326')
+            
+            # Configurar tooltip
+            tooltip_fields = [colonia_column] if colonia_column else []
+            tooltip_aliases = ["Colonia:"] if colonia_column else []
+            
+            geojson_layer = folium.GeoJson(
                 geojson_data,
                 name="Límites de Colonias",
                 style_function=lambda x: {
                     'fillColor': 'transparent',
-                    'color': 'black',
-                    'weight': 1,
+                    'color': 'blue',
+                    'weight': 2,
                     'fillOpacity': 0.1
                 },
                 tooltip=folium.GeoJsonTooltip(
-                    fields=[col for col in geojson_data.columns if col != 'geometry'],
-                    aliases=[col for col in geojson_data.columns if col != 'geometry']
-                )
-            ).add_to(m)
+                    fields=tooltip_fields,
+                    aliases=tooltip_aliases,
+                    localize=True
+                ) if tooltip_fields else None
+            )
+            geojson_layer.add_to(m)
         except Exception as e:
             st.warning(f"No se pudo cargar el GeoJSON: {str(e)}")
+    
+    # Añadir control de capas
+    folium.LayerControl().add_to(m)
     
     return m
 
@@ -170,10 +185,27 @@ if uploaded_file is not None:
         else:
             df_filtered = df.copy()
         
+        # Configuración del mapa
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🗺️ Configuración del Mapa")
+        
+        show_heatmap = st.sidebar.checkbox("Mostrar mapa de calor", value=True)
+        show_boundaries = st.sidebar.checkbox("Mostrar límites de colonias", value=True)
+        
         # Cargar GeoJSON si está disponible
         geojson_data = None
+        colonia_column = None
+        
         if uploaded_geojson is not None:
             geojson_data = load_geojson(uploaded_geojson)
+            if geojson_data is not None:
+                # Seleccionar columna para nombres de colonias
+                available_columns = [col for col in geojson_data.columns if col != 'geometry']
+                if available_columns:
+                    colonia_column = st.sidebar.selectbox(
+                        "Selecciona la columna con nombres de colonias:",
+                        available_columns
+                    )
         
         # Layout principal
         col1, col2 = st.columns([2, 1])
@@ -182,7 +214,7 @@ if uploaded_file is not None:
             st.subheader("🗺️ Mapa de Calor de Incidentes")
             
             # Crear mapa
-            m = create_heatmap(df_filtered, geojson_data)
+            m = create_heatmap(df_filtered, geojson_data, colonia_column, show_heatmap, show_boundaries)
             
             if m is not None:
                 # Mostrar mapa
@@ -227,9 +259,10 @@ if uploaded_file is not None:
                 )
                 
                 fig_bar.update_layout(
-                    height=500,
+                    height=250,
                     showlegend=False,
-                    yaxis={'categoryorder': 'total ascending'}
+                    yaxis={'categoryorder': 'total ascending'},
+                    margin=dict(l=0, r=0, t=50, b=0)
                 )
                 
                 st.plotly_chart(fig_bar, use_container_width=True)
@@ -242,7 +275,7 @@ if uploaded_file is not None:
                         # Descargar como PNG
                         img_bytes = fig_bar.to_image(format="png")
                         st.download_button(
-                            label="📥 Descargar Gráfico (PNG)",
+                            label="📥 Descargar (PNG)",
                             data=img_bytes,
                             file_name="top10_colonias_incidentes.png",
                             mime="image/png"
@@ -254,13 +287,86 @@ if uploaded_file is not None:
                     # Descargar como HTML
                     html_bytes = fig_bar.to_html().encode()
                     st.download_button(
-                        label="📥 Descargar Gráfico (HTML)",
+                        label="📥 Descargar (HTML)",
                         data=html_bytes,
                         file_name="top10_colonias_incidentes.html",
                         mime="text/html"
                     )
             else:
                 st.warning("No hay datos suficientes para generar el gráfico de colonias.")
+            
+            # NUEVA GRÁFICA: Colonias más afectadas por lluvia
+            st.subheader("🌧️ Top 10 Colonias por Incidentes de Lluvia")
+            
+            # Filtrar incidentes relacionados con lluvia
+            # Buscar en descripción o tipo de reporte
+            lluvia_keywords = ['lluvia', 'lluvias', 'inundacion', 'inundaciones', 'encharcamiento', 'precipitacion', 'pluvial']
+            
+            def contains_lluvia(text):
+                if pd.isna(text):
+                    return False
+                text_str = str(text).lower()
+                return any(keyword in text_str for keyword in lluvia_keywords)
+            
+            # Aplicar filtro
+            df_lluvia = df_filtered[
+                df_filtered['descripcion_del_incidente'].apply(contains_lluvia) |
+                df_filtered['tipo_de_reporte_(incidente)'].apply(contains_lluvia)
+            ]
+            
+            colonia_lluvia_counts = df_lluvia['colonia'].value_counts().head(10)
+            
+            if not colonia_lluvia_counts.empty:
+                # Crear gráfico de barras para lluvia
+                fig_bar_lluvia = px.bar(
+                    x=colonia_lluvia_counts.values,
+                    y=colonia_lluvia_counts.index,
+                    orientation='h',
+                    title="Top 10 Colonias con Más Incidentes de Lluvia",
+                    labels={'x': 'Número de Incidentes', 'y': 'Colonia'},
+                    color=colonia_lluvia_counts.values,
+                    color_continuous_scale='blues'
+                )
+                
+                fig_bar_lluvia.update_layout(
+                    height=250,
+                    showlegend=False,
+                    yaxis={'categoryorder': 'total ascending'},
+                    margin=dict(l=0, r=0, t=50, b=0)
+                )
+                
+                st.plotly_chart(fig_bar_lluvia, use_container_width=True)
+                
+                # Botones para descargar gráfico de lluvia
+                col_download3, col_download4 = st.columns(2)
+                
+                with col_download3:
+                    try:
+                        # Descargar como PNG
+                        img_bytes_lluvia = fig_bar_lluvia.to_image(format="png")
+                        st.download_button(
+                            label="📥 Descargar (PNG)",
+                            data=img_bytes_lluvia,
+                            file_name="top10_colonias_lluvia.png",
+                            mime="image/png"
+                        )
+                    except Exception as e:
+                        st.error("Error al generar PNG para gráfica de lluvia")
+                
+                with col_download4:
+                    # Descargar como HTML
+                    html_bytes_lluvia = fig_bar_lluvia.to_html().encode()
+                    st.download_button(
+                        label="📥 Descargar (HTML)",
+                        data=html_bytes_lluvia,
+                        file_name="top10_colonias_lluvia.html",
+                        mime="text/html"
+                    )
+                
+                # Mostrar estadísticas de lluvia
+                st.info(f"**Total de incidentes relacionados con lluvia:** {len(df_lluvia)}")
+            else:
+                st.warning("No se encontraron incidentes relacionados con lluvia en los datos filtrados.")
         
         # Sección adicional de análisis
         st.markdown("---")
@@ -345,8 +451,10 @@ else:
     **Características:**
     - 🗺️ Mapa de calor interactivo de incidentes
     - 🏆 Top 10 colonias más afectadas
+    - 🌧️ Top 10 colonias afectadas por lluvia
     - 📈 Gráficos descargables en PNG y HTML
     - 🔍 Filtros por tipo de incidente
+    - ⚙️ Control de capas del mapa
     - 📊 Análisis temporal y por categorías
     """)
     

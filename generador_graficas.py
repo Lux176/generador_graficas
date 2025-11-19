@@ -27,24 +27,6 @@ st.markdown("---")
 def load_data(uploaded_file):
     try:
         df = pd.read_excel(uploaded_file)
-        
-        # Limpieza básica de datos
-        df['colonia'] = df['colonia'].str.strip().str.title()
-        df = df.dropna(subset=['colonia'])
-        
-        # Convertir fecha a formato datetime de manera segura
-        df['fecha_del_incidente'] = pd.to_datetime(df['fecha_del_incidente'], errors='coerce')
-        
-        # Convertir latitud y longitud a numérico, manejando errores
-        df['latitud'] = pd.to_numeric(df['latitud'], errors='coerce')
-        df['longitud'] = pd.to_numeric(df['longitud'], errors='coerce')
-        
-        # Filtrar coordenadas inválidas o fuera de rango razonable para México
-        df = df[
-            (df['latitud'].between(19.0, 20.0)) & 
-            (df['longitud'].between(-99.3, -99.1))
-        ]
-        
         return df
     except Exception as e:
         st.error(f"Error al cargar el archivo: {str(e)}")
@@ -61,20 +43,19 @@ def load_geojson(uploaded_geojson):
         return None
 
 # Función para crear mapa
-def create_heatmap(df_filtered, geojson_data=None, colonia_column=None, show_heatmap=True, show_boundaries=True):
+def create_heatmap(df_filtered, lat_col, lon_col, geojson_data=None, colonia_column=None, show_heatmap=True, show_boundaries=True):
     """Crea un mapa de calor con los datos filtrados"""
     # Filtrar coordenadas válidas
-    coordenadas_validas = df_filtered[['latitud', 'longitud']].dropna()
+    coordenadas_validas = df_filtered[[lat_col, lon_col]].dropna()
     
     if coordenadas_validas.empty:
         return None
     
     # Calcular centro del mapa de manera segura
     try:
-        avg_lat = coordenadas_validas['latitud'].mean()
-        avg_lon = coordenadas_validas['longitud'].mean()
+        avg_lat = coordenadas_validas[lat_col].mean()
+        avg_lon = coordenadas_validas[lon_col].mean()
     except Exception as e:
-        st.error(f"Error calculando centro del mapa: {str(e)}")
         # Usar coordenadas por defecto de Magdalena Contreras
         avg_lat = 19.32
         avg_lon = -99.24
@@ -83,8 +64,8 @@ def create_heatmap(df_filtered, geojson_data=None, colonia_column=None, show_hea
     
     # Preparar datos para heatmap
     heat_data = []
-    for idx, row in df_filtered.dropna(subset=['latitud', 'longitud']).iterrows():
-        heat_data.append([row['latitud'], row['longitud'], 1])
+    for idx, row in df_filtered.dropna(subset=[lat_col, lon_col]).iterrows():
+        heat_data.append([row[lat_col], row[lon_col], 1])
     
     # Añadir heatmap si está activado
     if show_heatmap and heat_data:
@@ -154,36 +135,121 @@ if uploaded_file is not None:
     if df is not None:
         # Mostrar información básica del dataset
         st.sidebar.markdown("---")
-        st.sidebar.subheader("📈 Resumen de Datos")
-        st.sidebar.write(f"Total de registros: {len(df):,}")
-        st.sidebar.write(f"Total de colonias: {df['colonia'].nunique()}")
-        st.sidebar.write(f"Registros con coordenadas válidas: {df[['latitud', 'longitud']].notna().all(axis=1).sum()}")
+        st.sidebar.subheader("📈 Configuración de Columnas")
         
-        # Manejo seguro de las fechas
-        fechas_validas = df['fecha_del_incidente'].dropna()
-        if not fechas_validas.empty:
-            min_date = fechas_validas.min().date()
-            max_date = fechas_validas.max().date()
-            st.sidebar.write(f"Período: {min_date} - {max_date}")
+        # Selección manual de columnas
+        available_columns = df.columns.tolist()
+        
+        colonia_col = st.sidebar.selectbox(
+            "Selecciona la columna de COLONIAS:",
+            available_columns,
+            index=available_columns.index('colonia') if 'colonia' in available_columns else 0
+        )
+        
+        tipo_incidente_col = st.sidebar.selectbox(
+            "Selecciona la columna de TIPO DE INCIDENTE:",
+            available_columns,
+            index=available_columns.index('tipo_de_reporte_(incidente)') if 'tipo_de_reporte_(incidente)' in available_columns else 0
+        )
+        
+        # Buscar columnas relacionadas con lluvia
+        lluvia_col_options = [None] + available_columns
+        lluvia_default_index = 0
+        for i, col in enumerate(available_columns):
+            if 'lluvia' in col.lower() or 'lluvias' in col.lower():
+                lluvia_default_index = i + 1
+                break
+        
+        lluvia_col = st.sidebar.selectbox(
+            "Selecciona la columna de REPORTE POR LLUVIAS (opcional):",
+            lluvia_col_options,
+            index=lluvia_default_index
+        )
+        
+        # Buscar columnas de coordenadas
+        lat_col_options = [col for col in available_columns if 'lat' in col.lower()]
+        lon_col_options = [col for col in available_columns if 'lon' in col.lower() or 'long' in col.lower()]
+        
+        lat_col = st.sidebar.selectbox(
+            "Selecciona la columna de LATITUD:",
+            available_columns,
+            index=available_columns.index(lat_col_options[0]) if lat_col_options else 0
+        )
+        
+        lon_col = st.sidebar.selectbox(
+            "Selecciona la columna de LONGITUD:",
+            available_columns,
+            index=available_columns.index(lon_col_options[0]) if lon_col_options else 0
+        )
+        
+        # Procesar datos según las columnas seleccionadas
+        df_processed = df.copy()
+        
+        # Limpieza básica de datos
+        df_processed['colonia_processed'] = df_processed[colonia_col].astype(str).str.strip().str.title()
+        df_processed = df_processed.dropna(subset=['colonia_processed'])
+        
+        # Convertir fecha si existe
+        fecha_cols = [col for col in available_columns if 'fecha' in col.lower()]
+        if fecha_cols:
+            fecha_col = fecha_cols[0]
+            df_processed['fecha_processed'] = pd.to_datetime(df_processed[fecha_col], errors='coerce')
+        
+        # Convertir coordenadas a numérico
+        df_processed['lat_processed'] = pd.to_numeric(df_processed[lat_col], errors='coerce')
+        df_processed['lon_processed'] = pd.to_numeric(df_processed[lon_col], errors='coerce')
+        
+        # Procesar columna de lluvia si existe
+        if lluvia_col:
+            # Convertir a string y limpiar
+            df_processed['lluvia_processed'] = df_processed[lluvia_col].astype(str).str.strip().str.lower()
+            # Considerar 'si' como True, todo lo demás (incluido NaN) como False
+            df_processed['es_lluvia'] = df_processed['lluvia_processed'] == 'si'
         else:
-            st.sidebar.write("Período: No disponible")
+            df_processed['es_lluvia'] = False
+        
+        # Filtrar coordenadas inválidas o fuera de rango razonable para México
+        df_processed = df_processed[
+            (df_processed['lat_processed'].between(19.0, 20.0)) & 
+            (df_processed['lon_processed'].between(-99.3, -99.1))
+        ]
+        
+        # Mostrar información básica del dataset
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 Resumen de Datos")
+        st.sidebar.write(f"Total de registros: {len(df):,}")
+        st.sidebar.write(f"Total de colonias: {df_processed['colonia_processed'].nunique()}")
+        st.sidebar.write(f"Registros con coordenadas válidas: {df_processed[['lat_processed', 'lon_processed']].notna().all(axis=1).sum()}")
+        if lluvia_col:
+            st.sidebar.write(f"Incidentes por lluvia: {df_processed['es_lluvia'].sum()}")
         
         # Filtros en sidebar
         st.sidebar.markdown("---")
         st.sidebar.subheader("🔍 Filtros")
         
         # Filtro por tipo de incidente
-        tipos_incidente = ['Todos'] + sorted(df['tipo_de_reporte_(incidente)'].dropna().unique().tolist())
+        tipos_incidente = ['Todos'] + sorted(df_processed[tipo_incidente_col].dropna().unique().tolist())
         selected_tipo = st.sidebar.selectbox(
             "Tipo de incidente:",
             tipos_incidente
         )
         
+        # Filtro por lluvia
+        filtro_lluvia = st.sidebar.selectbox(
+            "Filtrar por lluvia:",
+            ['Todos', 'Solo incidentes por lluvia', 'Excluir incidentes por lluvia']
+        )
+        
         # Aplicar filtros
+        df_filtered = df_processed.copy()
+        
         if selected_tipo != 'Todos':
-            df_filtered = df[df['tipo_de_reporte_(incidente)'] == selected_tipo].copy()
-        else:
-            df_filtered = df.copy()
+            df_filtered = df_filtered[df_filtered[tipo_incidente_col] == selected_tipo]
+        
+        if filtro_lluvia == 'Solo incidentes por lluvia':
+            df_filtered = df_filtered[df_filtered['es_lluvia'] == True]
+        elif filtro_lluvia == 'Excluir incidentes por lluvia':
+            df_filtered = df_filtered[df_filtered['es_lluvia'] == False]
         
         # Configuración del mapa
         st.sidebar.markdown("---")
@@ -200,11 +266,11 @@ if uploaded_file is not None:
             geojson_data = load_geojson(uploaded_geojson)
             if geojson_data is not None:
                 # Seleccionar columna para nombres de colonias
-                available_columns = [col for col in geojson_data.columns if col != 'geometry']
-                if available_columns:
+                available_geojson_columns = [col for col in geojson_data.columns if col != 'geometry']
+                if available_geojson_columns:
                     colonia_column = st.sidebar.selectbox(
-                        "Selecciona la columna con nombres de colonias:",
-                        available_columns
+                        "Selecciona la columna del GeoJSON con nombres de colonias:",
+                        available_geojson_columns
                     )
         
         # Layout principal
@@ -214,7 +280,7 @@ if uploaded_file is not None:
             st.subheader("🗺️ Mapa de Calor de Incidentes")
             
             # Crear mapa
-            m = create_heatmap(df_filtered, geojson_data, colonia_column, show_heatmap, show_boundaries)
+            m = create_heatmap(df_filtered, 'lat_processed', 'lon_processed', geojson_data, colonia_column, show_heatmap, show_boundaries)
             
             if m is not None:
                 # Mostrar mapa
@@ -233,18 +299,12 @@ if uploaded_file is not None:
                     st.warning("No se pudo generar el archivo HTML del mapa")
             else:
                 st.warning("No hay datos de coordenadas válidas para generar el mapa de calor.")
-                st.info("""
-                **Solución:**
-                - Verifique que las columnas 'latitud' y 'longitud' contengan valores numéricos
-                - Asegúrese de que las coordenadas estén en el rango aproximado de la Ciudad de México
-                - Las coordenadas deben estar en formato decimal (ej: 19.4326, -99.1332)
-                """)
         
         with col2:
             st.subheader("🏆 Top 10 Colonias Más Afectadas")
             
             # Contar incidentes por colonia
-            colonia_counts = df_filtered['colonia'].value_counts().head(10)
+            colonia_counts = df_filtered['colonia_processed'].value_counts().head(10)
             
             if not colonia_counts.empty:
                 # Crear gráfico de barras
@@ -281,7 +341,7 @@ if uploaded_file is not None:
                             mime="image/png"
                         )
                     except Exception as e:
-                        st.error("Error al generar PNG. Instale: pip install kaleido")
+                        st.error("Error al generar PNG")
                 
                 with col_download2:
                     # Descargar como HTML
@@ -295,78 +355,65 @@ if uploaded_file is not None:
             else:
                 st.warning("No hay datos suficientes para generar el gráfico de colonias.")
             
-            # NUEVA GRÁFICA: Colonias más afectadas por lluvia
-            st.subheader("🌧️ Top 10 Colonias por Incidentes de Lluvia")
-            
-            # Filtrar incidentes relacionados con lluvia
-            # Buscar en descripción o tipo de reporte
-            lluvia_keywords = ['lluvia', 'lluvias', 'inundacion', 'inundaciones', 'encharcamiento', 'precipitacion', 'pluvial']
-            
-            def contains_lluvia(text):
-                if pd.isna(text):
-                    return False
-                text_str = str(text).lower()
-                return any(keyword in text_str for keyword in lluvia_keywords)
-            
-            # Aplicar filtro
-            df_lluvia = df_filtered[
-                df_filtered['descripcion_del_incidente'].apply(contains_lluvia) |
-                df_filtered['tipo_de_reporte_(incidente)'].apply(contains_lluvia)
-            ]
-            
-            colonia_lluvia_counts = df_lluvia['colonia'].value_counts().head(10)
-            
-            if not colonia_lluvia_counts.empty:
-                # Crear gráfico de barras para lluvia
-                fig_bar_lluvia = px.bar(
-                    x=colonia_lluvia_counts.values,
-                    y=colonia_lluvia_counts.index,
-                    orientation='h',
-                    title="Top 10 Colonias con Más Incidentes de Lluvia",
-                    labels={'x': 'Número de Incidentes', 'y': 'Colonia'},
-                    color=colonia_lluvia_counts.values,
-                    color_continuous_scale='blues'
-                )
+            # GRÁFICA: Colonias más afectadas por lluvia
+            if lluvia_col:
+                st.subheader("🌧️ Top 10 Colonias por Incidentes de Lluvia")
                 
-                fig_bar_lluvia.update_layout(
-                    height=250,
-                    showlegend=False,
-                    yaxis={'categoryorder': 'total ascending'},
-                    margin=dict(l=0, r=0, t=50, b=0)
-                )
+                # Filtrar solo incidentes de lluvia
+                df_lluvia = df_filtered[df_filtered['es_lluvia'] == True]
+                colonia_lluvia_counts = df_lluvia['colonia_processed'].value_counts().head(10)
                 
-                st.plotly_chart(fig_bar_lluvia, use_container_width=True)
-                
-                # Botones para descargar gráfico de lluvia
-                col_download3, col_download4 = st.columns(2)
-                
-                with col_download3:
-                    try:
-                        # Descargar como PNG
-                        img_bytes_lluvia = fig_bar_lluvia.to_image(format="png")
-                        st.download_button(
-                            label="📥 Descargar (PNG)",
-                            data=img_bytes_lluvia,
-                            file_name="top10_colonias_lluvia.png",
-                            mime="image/png"
-                        )
-                    except Exception as e:
-                        st.error("Error al generar PNG para gráfica de lluvia")
-                
-                with col_download4:
-                    # Descargar como HTML
-                    html_bytes_lluvia = fig_bar_lluvia.to_html().encode()
-                    st.download_button(
-                        label="📥 Descargar (HTML)",
-                        data=html_bytes_lluvia,
-                        file_name="top10_colonias_lluvia.html",
-                        mime="text/html"
+                if not colonia_lluvia_counts.empty:
+                    # Crear gráfico de barras para lluvia
+                    fig_bar_lluvia = px.bar(
+                        x=colonia_lluvia_counts.values,
+                        y=colonia_lluvia_counts.index,
+                        orientation='h',
+                        title="Top 10 Colonias con Más Incidentes de Lluvia",
+                        labels={'x': 'Número de Incidentes', 'y': 'Colonia'},
+                        color=colonia_lluvia_counts.values,
+                        color_continuous_scale='blues'
                     )
-                
-                # Mostrar estadísticas de lluvia
-                st.info(f"**Total de incidentes relacionados con lluvia:** {len(df_lluvia)}")
-            else:
-                st.warning("No se encontraron incidentes relacionados con lluvia en los datos filtrados.")
+                    
+                    fig_bar_lluvia.update_layout(
+                        height=250,
+                        showlegend=False,
+                        yaxis={'categoryorder': 'total ascending'},
+                        margin=dict(l=0, r=0, t=50, b=0)
+                    )
+                    
+                    st.plotly_chart(fig_bar_lluvia, use_container_width=True)
+                    
+                    # Botones para descargar gráfico de lluvia
+                    col_download3, col_download4 = st.columns(2)
+                    
+                    with col_download3:
+                        try:
+                            # Descargar como PNG
+                            img_bytes_lluvia = fig_bar_lluvia.to_image(format="png")
+                            st.download_button(
+                                label="📥 Descargar (PNG)",
+                                data=img_bytes_lluvia,
+                                file_name="top10_colonias_lluvia.png",
+                                mime="image/png"
+                            )
+                        except Exception as e:
+                            st.error("Error al generar PNG para gráfica de lluvia")
+                    
+                    with col_download4:
+                        # Descargar como HTML
+                        html_bytes_lluvia = fig_bar_lluvia.to_html().encode()
+                        st.download_button(
+                            label="📥 Descargar (HTML)",
+                            data=html_bytes_lluvia,
+                            file_name="top10_colonias_lluvia.html",
+                            mime="text/html"
+                        )
+                    
+                    # Mostrar estadísticas de lluvia
+                    st.info(f"**Total de incidentes por lluvia:** {len(df_lluvia)}")
+                else:
+                    st.warning("No se encontraron incidentes de lluvia en los datos filtrados.")
         
         # Sección adicional de análisis
         st.markdown("---")
@@ -377,7 +424,7 @@ if uploaded_file is not None:
         with col3:
             # Distribución por tipo de incidente
             st.write("**Distribución de Tipos de Incidente**")
-            tipo_counts = df_filtered['tipo_de_reporte_(incidente)'].value_counts().head(10)
+            tipo_counts = df_filtered[tipo_incidente_col].value_counts().head(10)
             if not tipo_counts.empty:
                 fig_pie = px.pie(
                     values=tipo_counts.values,
@@ -385,40 +432,90 @@ if uploaded_file is not None:
                     title="Top 10 Tipos de Incidente Más Comunes"
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
+                
+                # Botón para descargar gráfico de torta
+                col_pie1, col_pie2 = st.columns(2)
+                with col_pie1:
+                    try:
+                        img_bytes_pie = fig_pie.to_image(format="png")
+                        st.download_button(
+                            label="📥 Descargar Gráfico (PNG)",
+                            data=img_bytes_pie,
+                            file_name="distribucion_tipos_incidente.png",
+                            mime="image/png"
+                        )
+                    except Exception as e:
+                        st.error("Error al generar PNG")
+                
+                with col_pie2:
+                    html_bytes_pie = fig_pie.to_html().encode()
+                    st.download_button(
+                        label="📥 Descargar Gráfico (HTML)",
+                        data=html_bytes_pie,
+                        file_name="distribucion_tipos_incidente.html",
+                        mime="text/html"
+                    )
             else:
                 st.warning("No hay datos de tipos de incidente.")
         
         with col4:
             # Evolución temporal
             st.write("**Evolución Temporal de Incidentes**")
-            df_temp = df_filtered.copy()
-            # Usar solo fechas válidas
-            df_temp = df_temp.dropna(subset=['fecha_del_incidente'])
-            if not df_temp.empty:
-                df_temp['fecha'] = df_temp['fecha_del_incidente'].dt.date
-                daily_counts = df_temp['fecha'].value_counts().sort_index()
-                
-                fig_line = px.line(
-                    x=daily_counts.index,
-                    y=daily_counts.values,
-                    title="Incidentes por Día",
-                    labels={'x': 'Fecha', 'y': 'Número de Incidentes'}
-                )
-                fig_line.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_line, use_container_width=True)
+            if 'fecha_processed' in df_filtered.columns:
+                df_temp = df_filtered.dropna(subset=['fecha_processed'])
+                if not df_temp.empty:
+                    df_temp['fecha'] = df_temp['fecha_processed'].dt.date
+                    daily_counts = df_temp['fecha'].value_counts().sort_index()
+                    
+                    fig_line = px.line(
+                        x=daily_counts.index,
+                        y=daily_counts.values,
+                        title="Incidentes por Día",
+                        labels={'x': 'Fecha', 'y': 'Número de Incidentes'}
+                    )
+                    fig_line.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_line, use_container_width=True)
+                    
+                    # Botón para descargar gráfico de línea
+                    col_line1, col_line2 = st.columns(2)
+                    with col_line1:
+                        try:
+                            img_bytes_line = fig_line.to_image(format="png")
+                            st.download_button(
+                                label="📥 Descargar Gráfico (PNG)",
+                                data=img_bytes_line,
+                                file_name="evolucion_temporal_incidentes.png",
+                                mime="image/png"
+                            )
+                        except Exception as e:
+                            st.error("Error al generar PNG")
+                    
+                    with col_line2:
+                        html_bytes_line = fig_line.to_html().encode()
+                        st.download_button(
+                            label="📥 Descargar Gráfico (HTML)",
+                            data=html_bytes_line,
+                            file_name="evolucion_temporal_incidentes.html",
+                            mime="text/html"
+                        )
+                else:
+                    st.warning("No hay datos de fechas válidas para el análisis temporal.")
             else:
-                st.warning("No hay datos de fechas válidas para el análisis temporal.")
+                st.warning("No se encontró columna de fecha en los datos.")
         
         # Tabla de datos
         st.markdown("---")
         st.subheader("📋 Vista Previa de Datos")
         
-        # Mostrar tabla con las columnas disponibles
-        columnas_disponibles = [col for col in ['fecha_del_incidente', 'colonia', 'tipo_de_reporte_(incidente)', 'descripcion_del_incidente'] 
-                               if col in df_filtered.columns]
+        # Mostrar tabla con las columnas seleccionadas
+        columnas_mostrar = [colonia_col, tipo_incidente_col]
+        if lluvia_col:
+            columnas_mostrar.append(lluvia_col)
+        if 'fecha_processed' in df_filtered.columns:
+            columnas_mostrar.append('fecha_processed')
         
         st.dataframe(
-            df_filtered[columnas_disponibles].head(50),
+            df_filtered[columnas_mostrar].head(50),
             use_container_width=True,
             height=300
         )
@@ -445,28 +542,18 @@ else:
     
     **Para comenzar:**
     1. Sube tu archivo Excel con los datos de incidentes en el panel izquierdo
-    2. (Opcional) Sube un archivo GeoJSON con los límites de las colonias
-    3. Explora los mapas de calor y gráficos generados automáticamente
+    2. Configura las columnas manualmente según tu archivo
+    3. (Opcional) Sube un archivo GeoJSON con los límites de las colonias
+    4. Explora los mapas de calor y gráficos generados automáticamente
     
     **Características:**
     - 🗺️ Mapa de calor interactivo de incidentes
     - 🏆 Top 10 colonias más afectadas
     - 🌧️ Top 10 colonias afectadas por lluvia
     - 📈 Gráficos descargables en PNG y HTML
-    - 🔍 Filtros por tipo de incidente
+    - 🔍 Filtros por tipo de incidente y lluvia
     - ⚙️ Control de capas del mapa
     - 📊 Análisis temporal y por categorías
-    """)
-    
-    # Ejemplo de cómo debería verse la data
-    st.info("""
-    **Estructura esperada del archivo Excel:**
-    - fecha_del_incidente
-    - colonia
-    - tipo_de_reporte_(incidente) 
-    - descripcion_del_incidente
-    - latitud (valores numéricos, ej: 19.4326)
-    - longitud (valores numéricos, ej: -99.1332)
     """)
 
 # Footer
@@ -475,3 +562,14 @@ st.markdown(
     "Desarrollado con Streamlit • "
     "Visualización de datos de incidentes en Magdalena Contreras"
 )
+
+# Información sobre Kaleido
+st.sidebar.markdown("---")
+st.sidebar.subheader("ℹ️ Información de Instalación")
+
+st.sidebar.info("""
+**Para exportar gráficos a PNG:**
+
+1. Instala kaleido en tu entorno:
+```bash
+pip install kaleido

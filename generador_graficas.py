@@ -563,13 +563,13 @@ st.markdown(
     "Visualización de datos de incidentes en Magdalena Contreras"
 )
 
-# Información sobre Kaleido
+# Información sobre Kaleido - CORREGIDO
 st.sidebar.markdown("---")
 st.sidebar.subheader("ℹ️ Información de Instalación")
 
-st.sidebar.info("""
-**Para exportar gráficos a PNG:**
-
-1. Instala kaleido en tu entorno:
-```bash
-pip install kaleido
+st.sidebar.markdown("**Para exportar gráficos a PNG:**")
+st.sidebar.markdown("1. Instala kaleido en tu entorno:")
+st.sidebar.code("pip install kaleido")
+st.sidebar.markdown("2. En Streamlit Cloud, agrégalo a `requirements.txt`")
+st.sidebar.markdown("3. Reinicia la aplicación")
+st.sidebar.markdown("📝 *Sin kaleido, solo podrás exportar en formato HTML*")
